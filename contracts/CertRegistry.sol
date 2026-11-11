@@ -18,6 +18,33 @@ contract CertRegistry {
     // Penyimpanan sertifikat berdasarkan ID
     mapping(string => Certificate) private certificates;
 
+    enum RevokeStatus { None, Pending, Approved, Rejected }
+
+    struct RevokeProposal {
+        bytes32 baHash;
+        RevokeStatus status;
+    }
+
+    uint256 private proposalCount;
+    mapping(string => uint256) public pendingProposalId;
+    mapping(string => mapping(uint256 => RevokeProposal)) public revokeProposals;
+
+    event RevokeProposed(
+        string certificateId,
+        uint256 indexed pid,
+        bytes32 baHash,
+        address indexed proposer
+    );
+
+    event RevokeReviewed(
+        string certificateId,
+        uint256 indexed pid,
+        bool approved,
+        address indexed reviewer
+    );
+
+    event Revoked(string certificateId, uint256 indexed pid);
+        
     // Catatan peristiwa ketika sertifikat diterbitkan
     event Issued(
         string certificateId,
@@ -55,7 +82,40 @@ contract CertRegistry {
 
         emit Issued(id, pdfHash, msg.sender);
     }
+    function proposeRevoke(string calldata id, bytes32 baHash) external {
+        require(msg.sender == issuerA, "Only issuer A");
 
+        Certificate storage cert = certificates[id];
+        require(cert.exists, "Certificate not found");
+        require(!cert.revoked, "Certificate already revoked");
+        require(baHash != bytes32(0), "BA hash is empty");
+        require(pendingProposalId[id] == 0, "Proposal already pending");
+
+        uint256 pid = ++proposalCount;
+        revokeProposals[id][pid] = RevokeProposal(baHash, RevokeStatus.Pending);
+        pendingProposalId[id] = pid;
+
+        emit RevokeProposed(id, pid, baHash, msg.sender);
+    }
+    function reviewRevoke(string calldata id, uint256 pid, bool ok) external {
+        require(msg.sender == approverB, "Only approver B");
+
+        Certificate storage cert = certificates[id];
+        require(cert.exists, "Certificate not found");
+        require(!cert.revoked, "Certificate already revoked");
+        require(pid != 0 && pendingProposalId[id] == pid, "Proposal is not pending");
+
+        RevokeProposal storage proposal = revokeProposals[id][pid];
+        proposal.status = ok ? RevokeStatus.Approved : RevokeStatus.Rejected;
+        delete pendingProposalId[id];
+
+        emit RevokeReviewed(id, pid, ok, msg.sender);
+        if (ok) {
+            cert.revoked = true;
+            emit Revoked(id, pid);
+        }
+    }  
+    
     // Fungsi untuk memeriksa sertifikat
     function check(
         string calldata id,
